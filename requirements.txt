@@ -1,0 +1,25 @@
+
+# Core FastAPI dependencies
+fastapi>=0.116.2
+uvicorn[standard]>=0.35.0
+
+# Database dependencies
+sqlalchemy[asyncio]>=2.0.43
+aiosqlite>=0.21.0
+
+# Data validation
+pydantic[email]>=2.11.9
+
+# Authentication & Security
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.5.0
+python-multipart>=0.0.20
+
+# Development and testing
+pytest>=8.4.1
+pytest-asyncio>=1.2.0
+httpx>=0.28.1
+
+# Optional: Additional useful packages
+python-dotenv>=1.0.0
+alembic>=1.13.0  # For database migrations
