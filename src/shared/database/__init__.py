@@ -1,12 +1,8 @@
-"""
-Database configuration and session management for FastAPI application.
-Supports both async and sync SQLAlchemy operations.
-"""
+
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
-from sqlalchemy import MetaData
 
 # Database URLs
 ASYNC_DATABASE_URL = "sqlite+aiosqlite:///./chatboost.db"
@@ -38,7 +34,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
 # Base class for all models
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy models."""
-    metadata = MetaData()
+    pass
 
 
 async def get_async_session() -> AsyncSession:
@@ -58,6 +54,20 @@ async def get_async_session() -> AsyncSession:
 def get_sync_session() -> SessionLocal:
     """
     Dependency to get sync database session.
+    
+    Yields:
+        Session: Database session for sync operations
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_db():
+    """
+    Dependency to get sync database session for FastAPI.
     
     Yields:
         Session: Database session for sync operations

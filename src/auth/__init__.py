@@ -20,7 +20,14 @@ from .crud import (
 )
 
 from ..shared.models.auth import User
-from ..shared.schemas.auth import UserBase, UserCreate, User as UserSchema, Token, TokenData, UserLogin
+from ..shared.schemas.auth import (
+    UserBase, 
+    UserCreate, 
+    User as UserSchema, 
+    Token, 
+    TokenData, 
+    UserLogin 
+)
 
 __all__ = [
     "verify_password",

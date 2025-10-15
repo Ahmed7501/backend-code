@@ -8,7 +8,10 @@ from typing import List
 
 from ..shared.database import get_sync_session
 from ..shared.models.bot_builder import Bot, BotFlow, BotNode, Template
+from ..shared.models.auth import User, Role
 from ..shared.schemas.bot_builder import BotSchema, FlowSchema, NodeSchema, TemplateSchema
+from ..auth.auth import get_current_active_user_sync
+from ..team.permissions import require_permission, Permission, check_ownership_or_admin, is_admin, check_bot_ownership_or_admin
 from .crud import (
     create_bot,
     get_bot,
@@ -31,46 +34,88 @@ router = APIRouter(prefix="/bots", tags=["Bot Builder"])
 
 # Bot endpoints
 @router.post("/", response_model=BotSchema, status_code=status.HTTP_201_CREATED)
-def create_bot_endpoint(bot: BotSchema, db: Session = Depends(get_sync_session)):
+def create_bot_endpoint(
+    bot: BotSchema, 
+    current_user: User = Depends(require_permission(Permission.BOT_CREATE)),
+    db: Session = Depends(get_sync_session)
+):
     """Create a new bot."""
-    return create_bot(db=db, bot=bot)
+    # Set organization and creator
+    bot_dict = bot.dict()
+    bot_dict["organization_id"] = current_user.organization_id
+    bot_dict["created_by_id"] = current_user.id
+    
+    return create_bot(db=db, bot=BotSchema(**bot_dict))
 
 
 @router.get("/", response_model=List[BotSchema])
 def get_all_bots_endpoint(
     skip: int = 0, 
-    limit: int = 100, 
+    limit: int = 100,
+    current_user: User = Depends(require_permission(Permission.BOT_READ)),
     db: Session = Depends(get_sync_session)
 ):
     """Get all bots with pagination."""
-    return get_all_bots(db=db, skip=skip, limit=limit)
+    # Admins see all bots, users see only their own
+    if is_admin(current_user, db):
+        return get_all_bots(db=db, skip=skip, limit=limit)
+    else:
+        return get_all_bots(db=db, skip=skip, limit=limit, created_by_id=current_user.id)
 
 
 @router.get("/{bot_id}", response_model=BotSchema)
-def get_bot_endpoint(bot_id: int, db: Session = Depends(get_sync_session)):
+def get_bot_endpoint(
+    bot_id: int,
+    current_user: User = Depends(require_permission(Permission.BOT_READ)),
+    db: Session = Depends(get_sync_session)
+):
     """Get a bot by ID."""
     bot = get_bot(db=db, bot_id=bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    
+    # Check ownership or admin access
+    if not check_ownership_or_admin(bot, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this bot")
+    
     return bot
 
 
 @router.put("/{bot_id}", response_model=BotSchema)
 def update_bot_endpoint(
     bot_id: int, 
-    bot_update: dict, 
+    bot_update: dict,
+    current_user: User = Depends(require_permission(Permission.BOT_UPDATE)),
     db: Session = Depends(get_sync_session)
 ):
     """Update a bot."""
-    bot = update_bot(db=db, bot_id=bot_id, bot_update=bot_update)
-    if not bot:
+    existing_bot = get_bot(db=db, bot_id=bot_id)
+    if not existing_bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    
+    # Check ownership or admin access
+    if not check_ownership_or_admin(existing_bot, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this bot")
+    
+    bot = update_bot(db=db, bot_id=bot_id, bot_update=bot_update)
     return bot
 
 
 @router.delete("/{bot_id}")
-def delete_bot_endpoint(bot_id: int, db: Session = Depends(get_sync_session)):
+def delete_bot_endpoint(
+    bot_id: int,
+    current_user: User = Depends(require_permission(Permission.BOT_DELETE)),
+    db: Session = Depends(get_sync_session)
+):
     """Delete a bot."""
+    existing_bot = get_bot(db=db, bot_id=bot_id)
+    if not existing_bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    # Check ownership or admin access
+    if not check_ownership_or_admin(existing_bot, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this bot")
+    
     success = delete_bot(db=db, bot_id=bot_id)
     if not success:
         raise HTTPException(status_code=404, detail="Bot not found")
@@ -79,27 +124,53 @@ def delete_bot_endpoint(bot_id: int, db: Session = Depends(get_sync_session)):
 
 # Flow endpoints
 @router.post("/flows/", response_model=FlowSchema, status_code=status.HTTP_201_CREATED)
-def create_flow_endpoint(flow: FlowSchema, db: Session = Depends(get_sync_session)):
+def create_flow_endpoint(
+    flow: FlowSchema, 
+    current_user: User = Depends(require_permission(Permission.FLOW_CREATE)),
+    db: Session = Depends(get_sync_session)
+):
     """Create a new flow."""
+    # Verify user owns the bot
+    bot = get_bot(db=db, bot_id=flow.bot_id)
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    if not check_ownership_or_admin(bot, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this bot")
+    
     return create_flow(db=db, flow=flow)
 
 
 @router.get("/flows/", response_model=List[FlowSchema])
 def get_all_flows_endpoint(
     skip: int = 0, 
-    limit: int = 100, 
+    limit: int = 100,
+    current_user: User = Depends(require_permission(Permission.FLOW_READ)),
     db: Session = Depends(get_sync_session)
 ):
     """Get all flows with pagination."""
-    return get_all_flows(db=db, skip=skip, limit=limit)
+    # Admins see all flows, users see only flows from their bots
+    if is_admin(current_user, db):
+        return get_all_flows(db=db, skip=skip, limit=limit)
+    else:
+        return get_all_flows(db=db, skip=skip, limit=limit, created_by_id=current_user.id)
 
 
 @router.get("/flows/{flow_id}", response_model=FlowSchema)
-def get_flow_endpoint(flow_id: int, db: Session = Depends(get_sync_session)):
+def get_flow_endpoint(
+    flow_id: int,
+    current_user: User = Depends(require_permission(Permission.FLOW_READ)),
+    db: Session = Depends(get_sync_session)
+):
     """Get a flow by ID."""
     flow = get_flow(db=db, flow_id=flow_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Flow not found")
+    
+    # Check ownership through bot
+    if not check_bot_ownership_or_admin(flow, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this flow")
+    
     return flow
 
 
@@ -107,10 +178,19 @@ def get_flow_endpoint(flow_id: int, db: Session = Depends(get_sync_session)):
 @router.post("/nodes/", response_model=NodeSchema, status_code=status.HTTP_201_CREATED)
 def create_node_endpoint(
     node: NodeSchema, 
-    flow_id: int, 
+    flow_id: int,
+    current_user: User = Depends(require_permission(Permission.FLOW_CREATE)),
     db: Session = Depends(get_sync_session)
 ):
     """Create a new node."""
+    # Verify user owns the flow's bot
+    flow = get_flow(db=db, flow_id=flow_id)
+    if not flow:
+        raise HTTPException(status_code=404, detail="Flow not found")
+    
+    if not check_bot_ownership_or_admin(flow, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this flow")
+    
     return create_node(db=db, node=node, flow_id=flow_id)
 
 
@@ -136,10 +216,12 @@ def get_node_endpoint(node_id: int, db: Session = Depends(get_sync_session)):
 # Template endpoints
 @router.post("/templates/", response_model=TemplateSchema, status_code=status.HTTP_201_CREATED)
 def create_template_endpoint(
-    template: TemplateSchema, 
+    template: TemplateSchema,
+    current_user: User = Depends(require_permission(Permission.FLOW_CREATE)),
     db: Session = Depends(get_sync_session)
 ):
     """Create a new template."""
+    # Templates are global resources, but require authentication
     return create_template(db=db, template=template)
 
 

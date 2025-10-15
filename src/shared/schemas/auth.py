@@ -1,7 +1,3 @@
-"""
-Pydantic models for data validation and serialization.
-These models define the structure of request/response data for the API.
-"""
 
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional

@@ -5,6 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.auth.router import router as auth_router
 from src.bot_builder.router import router as bot_router
 from src.whatsapp.router import router as whatsapp_router
+from src.flow_engine.router import router as flow_engine_router
+from src.flow_engine.contact_router import router as contact_router
+from src.analytics.router import router as analytics_router
+from src.team.router import router as team_router
+from src.notifications.router import router as notifications_router
+from src.notifications.websocket_router import router as websocket_router
+from src.triggers.router import router as triggers_router
 from src.shared.database import init_db
 
 # Create FastAPI app instance
@@ -30,6 +37,11 @@ app.include_router(auth_router)
 app.include_router(bot_router)
 app.include_router(whatsapp_router)
 app.include_router(flow_engine_router)
+app.include_router(contact_router)
+app.include_router(analytics_router)
+app.include_router(team_router)
+app.include_router(notifications_router)
+app.include_router(websocket_router)
 app.include_router(triggers_router)
 
 
@@ -52,7 +64,7 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "redoc": "/redoc",
-        "modules": ["Authentication", "Bot Builder", "WhatsApp", "Flow Engine", "Triggers"]
+        "modules": ["Authentication", "Bot Builder", "WhatsApp", "Flow Engine", "Contact Attributes", "Analytics", "Team Management", "Notifications", "Triggers"]
     }
 
 

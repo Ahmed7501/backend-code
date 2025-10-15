@@ -2,12 +2,16 @@
 WhatsApp CRUD operations for database interactions.
 """
 
+import asyncio
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 from ..shared.models.bot_builder import Bot, WhatsAppMessage, WhatsAppWebhookEvent
+
+logger = logging.getLogger(__name__)
 
 
 def save_message(
@@ -49,10 +53,21 @@ def update_message_status(
     ).first()
     
     if message:
+        old_status = message.status
         message.status = status
         message.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(message)
+        
+        # Trigger notification for status change
+        try:
+            from ..notifications.service import NotificationService
+            notification_service = NotificationService(db)
+            asyncio.create_task(
+                notification_service.notify_message_status_change(message, old_status, status)
+            )
+        except Exception as e:
+            logger.error(f"Failed to trigger notification for message status change: {e}")
     
     return message
 

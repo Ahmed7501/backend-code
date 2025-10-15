@@ -1,15 +1,11 @@
-"""
-Authentication router for user registration and login endpoints.
-"""
 
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..shared.database import get_async_session, init_db
 from ..shared.models.auth import User
-from ..shared.schemas.auth import UserCreate, User as UserSchema, Token
+from ..shared.schemas.auth import UserCreate, User as UserSchema, Token, UserLogin
 from .crud import create_user, get_all_users
 from .auth import authenticate_user, get_current_active_user, ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token
 
@@ -55,16 +51,16 @@ async def register_user(
             )
 
 
-@router.post("/token", response_model=Token)
+@router.post("/login", response_model=Token)
 async def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+    login_data: UserLogin,
     db: AsyncSession = Depends(get_async_session)
 ):
     """
     Login and get access token.
     
     Args:
-        form_data: OAuth2 password request form (username=email, password)
+        login_data: User login credentials (email and password)
         db: Database session
         
     Returns:
@@ -73,8 +69,8 @@ async def login_for_access_token(
     Raises:
         HTTPException: If authentication fails
     """
-    # Authenticate user (form_data.username is actually the email)
-    user = await authenticate_user(form_data.username, form_data.password, db)
+    # Authenticate user
+    user = await authenticate_user(login_data.email, login_data.password, db)
     
     if not user:
         raise HTTPException(

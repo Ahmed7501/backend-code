@@ -1,7 +1,3 @@
-#!/usr/bin/env python3
-"""
-Run script for ChatBoost Backend API
-"""
 
 import uvicorn
 from main import app

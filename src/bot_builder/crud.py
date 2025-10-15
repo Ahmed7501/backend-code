@@ -25,9 +25,12 @@ def get_bot(db: Session, bot_id: int) -> Optional[Bot]:
     return db.query(Bot).filter(Bot.id == bot_id).first()
 
 
-def get_all_bots(db: Session, skip: int = 0, limit: int = 100) -> List[Bot]:
+def get_all_bots(db: Session, skip: int = 0, limit: int = 100, created_by_id: int = None) -> List[Bot]:
     """Get all bots with pagination."""
-    return db.query(Bot).offset(skip).limit(limit).all()
+    query = db.query(Bot)
+    if created_by_id:
+        query = query.filter(Bot.created_by_id == created_by_id)
+    return query.offset(skip).limit(limit).all()
 
 
 def update_bot(db: Session, bot_id: int, bot_update: dict) -> Optional[Bot]:
@@ -75,9 +78,13 @@ def get_flow(db: Session, flow_id: int) -> Optional[BotFlow]:
     return db.query(BotFlow).filter(BotFlow.id == flow_id).first()
 
 
-def get_all_flows(db: Session, skip: int = 0, limit: int = 100) -> List[BotFlow]:
+def get_all_flows(db: Session, skip: int = 0, limit: int = 100, created_by_id: int = None) -> List[BotFlow]:
     """Get all flows with pagination."""
-    return db.query(BotFlow).offset(skip).limit(limit).all()
+    query = db.query(BotFlow)
+    if created_by_id:
+        # Filter flows by bot ownership
+        query = query.join(Bot).filter(Bot.created_by_id == created_by_id)
+    return query.offset(skip).limit(limit).all()
 
 
 # Node CRUD operations
