@@ -272,9 +272,9 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
         message_type = message.get("type")
         
         # Find bot by phone number
-        bot = get_bot_by_phone_number(db, value.get("metadata", {}).get("phone_number_id"))
+        bot = get_bot_by_phone_number(db, value.get("meta_data", {}).get("phone_number_id"))
         if not bot:
-            logger.warning(f"No bot found for phone number: {value.get('metadata', {}).get('phone_number_id')}")
+            logger.warning(f"No bot found for phone number: {value.get('meta_data', {}).get('phone_number_id')}")
             return
         
         # Extract message content based on type
@@ -300,6 +300,91 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
             sender_phone=from_number,
             status="received"
         )
+        
+        # Check if contact has active flow execution
+        from ..flow_engine.crud import get_contact_by_phone, get_active_execution_for_contact
+        from ..flow_engine.engine import FlowEngine
+        from ..triggers.matcher import TriggerMatcher
+        from ..triggers.crud import create_trigger_log
+        from ..triggers.events import get_event_dispatcher
+        
+        contact = get_contact_by_phone(db, from_number)
+        if contact:
+            active_execution = get_active_execution_for_contact(db, contact.id)
+            if active_execution:
+                # Process message through flow engine
+                engine = FlowEngine(db)
+                try:
+                    message_text = content.get("text", "") if message_type == "text" else str(content)
+                    await engine.handle_user_input(
+                        execution_id=active_execution.id,
+                        message=message_text,
+                        message_type=message_type
+                    )
+                    logger.info(f"Processed message {message_id} through flow engine for execution {active_execution.id}")
+                except Exception as flow_error:
+                    logger.error(f"Failed to process message through flow engine: {flow_error}")
+            else:
+                # No active execution - check for keyword triggers
+                message_text = content.get("text", "") if message_type == "text" else str(content)
+                if message_text:
+                    matcher = TriggerMatcher(db)
+                    matched_trigger = await matcher.match_keyword_triggers(
+                        message_text, bot.id, contact.id
+                    )
+                    
+                    if matched_trigger:
+                        # Launch flow from trigger
+                        engine = FlowEngine(db)
+                        try:
+                            execution = await engine.start_flow(
+                                flow_id=matched_trigger.flow_id,
+                                contact_phone=from_number,
+                                bot_id=bot.id,
+                                initial_state={
+                                    "triggered_by": matched_trigger.name,
+                                    "trigger_type": "keyword",
+                                    "matched_message": message_text
+                                }
+                            )
+                            
+                            # Log trigger execution
+                            create_trigger_log(db, {
+                                "trigger_id": matched_trigger.id,
+                                "contact_id": contact.id,
+                                "execution_id": execution.id,
+                                "matched_value": message_text,
+                                "success": True
+                            })
+                            
+                            logger.info(f"Triggered flow {matched_trigger.flow_id} from keyword trigger '{matched_trigger.name}'")
+                        except Exception as trigger_error:
+                            logger.error(f"Failed to execute keyword trigger: {trigger_error}")
+                            
+                            # Log failed trigger execution
+                            create_trigger_log(db, {
+                                "trigger_id": matched_trigger.id,
+                                "contact_id": contact.id,
+                                "matched_value": message_text,
+                                "success": False,
+                                "error": str(trigger_error)
+                            })
+        
+        # Fire message_received event
+        if contact:
+            try:
+                event_dispatcher = get_event_dispatcher(db)
+                await event_dispatcher.fire_message_received_event(
+                    bot_id=bot.id,
+                    contact_id=contact.id,
+                    message_data={
+                        "message_id": message_id,
+                        "message_type": message_type,
+                        "content": content
+                    }
+                )
+            except Exception as event_error:
+                logger.error(f"Failed to fire message_received event: {event_error}")
         
         logger.info(f"Processed incoming message {message_id} from {from_number}")
     

@@ -19,7 +19,17 @@ python-multipart>=0.0.20
 pytest>=8.4.1
 pytest-asyncio>=1.2.0
 httpx>=0.28.1
+requests>=2.31.0
 
 # Optional: Additional useful packages
 python-dotenv>=1.0.0
 alembic>=1.13.0  # For database migrations
+
+# Flow Engine Dependencies
+celery>=5.3.0
+redis>=5.0.0
+flower>=2.0.0  # Celery monitoring (optional)
+
+# Trigger System Dependencies
+pytz>=2023.3  # Timezone handling
+croniter>=1.4.1  # Cron expression parsing

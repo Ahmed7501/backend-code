@@ -29,6 +29,8 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(bot_router)
 app.include_router(whatsapp_router)
+app.include_router(flow_engine_router)
+app.include_router(triggers_router)
 
 
 @app.on_event("startup")
@@ -50,7 +52,7 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "redoc": "/redoc",
-        "modules": ["Authentication", "Bot Builder", "WhatsApp"]
+        "modules": ["Authentication", "Bot Builder", "WhatsApp", "Flow Engine", "Triggers"]
     }
 
 

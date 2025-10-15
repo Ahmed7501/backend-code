@@ -1,6 +1,3 @@
-"""
-Configuration settings for the ChatBoost backend application.
-"""
 
 import os
 from typing import Optional
@@ -35,5 +32,11 @@ class Settings:
     WHATSAPP_BUSINESS_ACCOUNT_ID: Optional[str] = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID")
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: Optional[str] = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
     WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v22.0")
+    
+    # Flow Engine Settings
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+    FLOW_EXECUTION_TIMEOUT: int = int(os.getenv("FLOW_EXECUTION_TIMEOUT", "1800"))
 
 settings = Settings()
