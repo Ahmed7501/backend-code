@@ -2,6 +2,7 @@
 WhatsApp API router for sending messages and handling webhooks.
 """
 
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from ..shared.database import get_sync_session
 from ..shared.models.bot_builder import Bot
 from ..shared.schemas.whatsapp import (
     WhatsAppMessageRequest,
+    WhatsAppTemplateRequest,
     WhatsAppTemplateMessage,
     WhatsAppTextMessage,
     WhatsAppMediaMessage,
@@ -18,7 +20,8 @@ from ..shared.schemas.whatsapp import (
     WhatsAppMessageResponse,
     WebhookEvent,
     WebhookVerification,
-    WhatsAppMessageHistory
+    WhatsAppMessageHistory,
+    WhatsAppWebhookPayload
 )
 from .service import whatsapp_service
 from .crud import (
@@ -39,17 +42,20 @@ router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 
 @router.post("/send/template", response_model=WhatsAppMessageResponse)
 async def send_template_message(
-    message: WhatsAppTemplateMessage,
+    message: WhatsAppTemplateRequest,
     bot_id: int,
     db: Session = Depends(get_sync_session)
 ):
-    """Send a template message via WhatsApp."""
-    bot = get_bot_by_id(db, bot_id)
+    """Send a template message via WhatsApp with validation and error handling."""
+    bot = await asyncio.to_thread(get_bot_by_id, db, bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     
     if not bot.is_whatsapp_enabled:
-        raise HTTPException(status_code=400, detail="WhatsApp is not enabled for this bot")
+        raise HTTPException(
+            status_code=400,
+            detail="WhatsApp is not enabled for this bot"
+        )
     
     try:
         credentials = await whatsapp_service.get_credentials(bot)
@@ -58,7 +64,8 @@ async def send_template_message(
         # Save message to database
         whatsapp_message_id = response.get("messages", [{}])[0].get("id")
         if whatsapp_message_id:
-            save_message(
+            await asyncio.to_thread(
+                save_message,
                 db=db,
                 bot_id=bot_id,
                 whatsapp_message_id=whatsapp_message_id,
@@ -76,9 +83,14 @@ async def send_template_message(
             created_at=response.get("timestamp", 0)
         )
     
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions from service layer
     except Exception as e:
-        logger.error(f"Failed to send template message: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
+        logger.error(f"Unexpected error sending template: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send message: {str(e)}"
+        )
 
 
 @router.post("/send/text", response_model=WhatsAppMessageResponse)
@@ -88,7 +100,7 @@ async def send_text_message(
     db: Session = Depends(get_sync_session)
 ):
     """Send a text message via WhatsApp."""
-    bot = get_bot_by_id(db, bot_id)
+    bot = await asyncio.to_thread(get_bot_by_id, db, bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     
@@ -102,7 +114,8 @@ async def send_text_message(
         # Save message to database
         whatsapp_message_id = response.get("messages", [{}])[0].get("id")
         if whatsapp_message_id:
-            save_message(
+            await asyncio.to_thread(
+                save_message,
                 db=db,
                 bot_id=bot_id,
                 whatsapp_message_id=whatsapp_message_id,
@@ -132,7 +145,7 @@ async def send_media_message(
     db: Session = Depends(get_sync_session)
 ):
     """Send a media message via WhatsApp."""
-    bot = get_bot_by_id(db, bot_id)
+    bot = await asyncio.to_thread(get_bot_by_id, db, bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     
@@ -146,7 +159,8 @@ async def send_media_message(
         # Save message to database
         whatsapp_message_id = response.get("messages", [{}])[0].get("id")
         if whatsapp_message_id:
-            save_message(
+            await asyncio.to_thread(
+                save_message,
                 db=db,
                 bot_id=bot_id,
                 whatsapp_message_id=whatsapp_message_id,
@@ -176,7 +190,7 @@ async def send_interactive_message(
     db: Session = Depends(get_sync_session)
 ):
     """Send an interactive message via WhatsApp."""
-    bot = get_bot_by_id(db, bot_id)
+    bot = await asyncio.to_thread(get_bot_by_id, db, bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     
@@ -190,7 +204,8 @@ async def send_interactive_message(
         # Save message to database
         whatsapp_message_id = response.get("messages", [{}])[0].get("id")
         if whatsapp_message_id:
-            save_message(
+            await asyncio.to_thread(
+                save_message,
                 db=db,
                 bot_id=bot_id,
                 whatsapp_message_id=whatsapp_message_id,
@@ -232,29 +247,29 @@ async def verify_webhook(
 
 @router.post("/webhook")
 async def receive_webhook(
-    request: Request,
+    webhook_payload: WhatsAppWebhookPayload,
     db: Session = Depends(get_sync_session)
 ):
     """Receive WhatsApp webhook events."""
     try:
-        body = await request.json()
-        
         # Save webhook event
-        save_webhook_event(db, "webhook", body)
+        await asyncio.to_thread(save_webhook_event, db, "webhook", webhook_payload.model_dump())
         
         # Process webhook events
-        for entry in body.get("entry", []):
-            for change in entry.get("changes", []):
-                if change.get("field") == "messages":
-                    value = change.get("value", {})
+        for entry in webhook_payload.entry:
+            for change in entry.changes:
+                if change.field == "messages":
+                    value = change.value
                     
                     # Process incoming messages
-                    for message in value.get("messages", []):
-                        await process_incoming_message(db, message, value)
+                    if value.messages:
+                        for message in value.messages:
+                            await process_incoming_message(db, message, value.model_dump())
                     
                     # Process status updates
-                    for status in value.get("statuses", []):
-                        await process_status_update(db, status)
+                    if value.statuses:
+                        for status in value.statuses:
+                            await process_status_update(db, status)
         
         return {"status": "ok"}
     
@@ -272,7 +287,7 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
         message_type = message.get("type")
         
         # Find bot by phone number
-        bot = get_bot_by_phone_number(db, value.get("meta_data", {}).get("phone_number_id"))
+        bot = await asyncio.to_thread(get_bot_by_phone_number, db, value.get("meta_data", {}).get("phone_number_id"))
         if not bot:
             logger.warning(f"No bot found for phone number: {value.get('meta_data', {}).get('phone_number_id')}")
             return
@@ -290,7 +305,8 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
             content = {"interactive": message.get("interactive", {})}
         
         # Save incoming message
-        save_message(
+        await asyncio.to_thread(
+            save_message,
             db=db,
             bot_id=bot.id,
             whatsapp_message_id=message_id,
@@ -308,9 +324,9 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
         from ..triggers.crud import create_trigger_log
         from ..triggers.events import get_event_dispatcher
         
-        contact = get_contact_by_phone(db, from_number)
+        contact = await asyncio.to_thread(get_contact_by_phone, db, from_number)
         if contact:
-            active_execution = get_active_execution_for_contact(db, contact.id)
+            active_execution = await asyncio.to_thread(get_active_execution_for_contact, db, contact.id)
             if active_execution:
                 # Process message through flow engine
                 engine = FlowEngine(db)
@@ -328,7 +344,7 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
                 # No active execution - check for keyword triggers
                 message_text = content.get("text", "") if message_type == "text" else str(content)
                 if message_text:
-                    matcher = TriggerMatcher(db)
+                    matcher = await asyncio.to_thread(TriggerMatcher, db)
                     matched_trigger = await matcher.match_keyword_triggers(
                         message_text, bot.id, contact.id
                     )
@@ -349,7 +365,7 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
                             )
                             
                             # Log trigger execution
-                            create_trigger_log(db, {
+                            await asyncio.to_thread(create_trigger_log, db, {
                                 "trigger_id": matched_trigger.id,
                                 "contact_id": contact.id,
                                 "execution_id": execution.id,
@@ -362,7 +378,7 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
                             logger.error(f"Failed to execute keyword trigger: {trigger_error}")
                             
                             # Log failed trigger execution
-                            create_trigger_log(db, {
+                            await asyncio.to_thread(create_trigger_log, db, {
                                 "trigger_id": matched_trigger.id,
                                 "contact_id": contact.id,
                                 "matched_value": message_text,
@@ -373,7 +389,7 @@ async def process_incoming_message(db: Session, message: dict, value: dict):
         # Fire message_received event
         if contact:
             try:
-                event_dispatcher = get_event_dispatcher(db)
+                event_dispatcher = await asyncio.to_thread(get_event_dispatcher, db)
                 await event_dispatcher.fire_message_received_event(
                     bot_id=bot.id,
                     contact_id=contact.id,
@@ -399,7 +415,7 @@ async def process_status_update(db: Session, status: dict):
         status_value = status.get("status")
         
         if message_id and status_value:
-            update_message_status(db, message_id, status_value)
+            await asyncio.to_thread(update_message_status, db, message_id, status_value)
             logger.info(f"Updated message {message_id} status to {status_value}")
     
     except Exception as e:
@@ -415,12 +431,12 @@ async def get_message_history(
     db: Session = Depends(get_sync_session)
 ):
     """Get message history for a bot."""
-    bot = get_bot_by_id(db, bot_id)
+    bot = await asyncio.to_thread(get_bot_by_id, db, bot_id)
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     
-    messages = get_bot_messages(db, bot_id, skip, limit, direction)
-    total = get_message_count_by_bot(db, bot_id, direction)
+    messages = await asyncio.to_thread(get_bot_messages, db, bot_id, skip, limit, direction)
+    total = await asyncio.to_thread(get_message_count_by_bot, db, bot_id, direction)
     
     return WhatsAppMessageHistory(
         messages=[msg.__dict__ for msg in messages],

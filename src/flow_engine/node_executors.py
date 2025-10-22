@@ -128,9 +128,10 @@ class SendMessageNodeExecutor(BaseNodeExecutor):
             else:
                 raise ValueError(f"Unsupported message type: {config.message_type}")
             
+            next_index = None if (config.next is None or config.next < 0) else config.next  # -1 ends flow
             return NodeExecutionResult(
                 success=True,
-                next_node_index=config.next,
+                next_node_index=next_index,
                 result_data={"response": response}
             )
         
@@ -317,7 +318,9 @@ class WebhookActionNodeExecutor(BaseNodeExecutor):
             # Store response in state if specified
             result_data = {"webhook_response": response_data}
             if config.store_response_in:
-                execution.state[config.store_response_in] = response_data
+                current_state = execution.state.copy()
+                current_state[config.store_response_in] = response_data
+                execution.state = current_state
             
             return NodeExecutionResult(
                 success=True,
@@ -359,7 +362,9 @@ class SetAttributeNodeExecutor(BaseNodeExecutor):
             )
             
             # Also store in execution state for immediate use
-            execution.state[f"contact.{config.attribute_key}"] = interpolated_value
+            current_state = execution.state.copy()
+            current_state[f"contact.{config.attribute_key}"] = interpolated_value
+            execution.state = current_state
             
             logger.info(f"Set attribute '{config.attribute_key}' = '{interpolated_value}' for contact {contact.id}")
             

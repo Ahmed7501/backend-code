@@ -85,11 +85,33 @@ async def create_user(db: AsyncSession, user: UserCreate) -> User:
     # Hash the password
     hashed_password = get_password_hash(user.password)
     
-    # Create new user
+    # Get or create default member role
+    from ..shared.models.auth import Role
+    member_role = await db.execute(select(Role).where(Role.name == "member"))
+    member_role = member_role.scalar_one_or_none()
+    
+    if not member_role:
+        # Create member role if it doesn't exist
+        member_role = Role(
+            name="member",
+            description="Can create and manage bots",
+            permissions=[
+                "bot:create", "bot:read", "bot:update", "bot:delete",
+                "flow:create", "flow:read", "flow:update", "flow:delete",
+                "analytics:view", "analytics:export",
+                "team:view", "contact:view", "contact:manage",
+                "trigger:create", "trigger:read", "trigger:update", "trigger:delete"
+            ]
+        )
+        db.add(member_role)
+        await db.flush()  # Flush to get the ID
+    
+    # Create new user with member role
     db_user = User(
         email=user.email,
         username=user.username,
-        hashed_password=hashed_password
+        hashed_password=hashed_password,
+        current_role_id=member_role.id
     )
     
     try:

@@ -14,8 +14,18 @@ class WhatsAppCredentials(BaseModel):
     business_account_id: Optional[str] = None
 
 
+class WhatsAppTemplateRequest(BaseModel):
+    """Simplified template message request schema."""
+    template_name: str = Field(..., description="Template name")
+    to: str = Field(..., description="Recipient phone number with country code")
+    variables: List[str] = Field(default_factory=list, description="Template variable values")
+    
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+
+
 class WhatsAppTemplateMessage(BaseModel):
-    """Template message schema."""
+    """Template message schema (deprecated - use WhatsAppTemplateRequest)."""
     to: str = Field(..., description="Recipient phone number")
     template_name: str = Field(..., description="Template name")
     language_code: str = Field(default="en_US", description="Language code")
@@ -67,8 +77,35 @@ class WhatsAppMessageResponse(BaseModel):
     created_at: datetime
 
 
+class WhatsAppWebhookValue(BaseModel):
+    """WhatsApp webhook value containing messages and statuses."""
+    messaging_product: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    contacts: Optional[List[Dict[str, Any]]] = None
+    messages: Optional[List[Dict[str, Any]]] = None
+    statuses: Optional[List[Dict[str, Any]]] = None
+
+
+class WhatsAppWebhookChange(BaseModel):
+    """WhatsApp webhook change entry."""
+    field: str
+    value: WhatsAppWebhookValue
+
+
+class WhatsAppWebhookEntry(BaseModel):
+    """WhatsApp webhook entry."""
+    id: str
+    changes: List[WhatsAppWebhookChange]
+
+
+class WhatsAppWebhookPayload(BaseModel):
+    """Complete WhatsApp webhook payload."""
+    object: str
+    entry: List[WhatsAppWebhookEntry]
+
+
 class WebhookEvent(BaseModel):
-    """WhatsApp webhook event."""
+    """WhatsApp webhook event (deprecated - use WhatsAppWebhookPayload)."""
     object: str
     entry: List[Dict[str, Any]]
 

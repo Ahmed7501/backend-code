@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from config.settings import settings
 from ..shared.models.bot_builder import Bot
 from ..shared.schemas.whatsapp import (
+    WhatsAppTemplateRequest,
     WhatsAppTemplateMessage,
     WhatsAppTextMessage,
     WhatsAppMediaMessage,
@@ -35,25 +36,36 @@ class WhatsAppService:
     async def send_template_message(
         self,
         credentials: WhatsAppCredentials,
-        message: WhatsAppTemplateMessage
+        message: WhatsAppTemplateRequest
     ) -> Dict[str, Any]:
-        """Send a template message via WhatsApp API."""
+        """Send a template message via WhatsApp API with comprehensive logging."""
+        from fastapi import HTTPException
+        
+        # Validate credentials
+        if not credentials.access_token or not credentials.phone_number_id:
+            logger.error("Missing WhatsApp credentials")
+            raise HTTPException(
+                status_code=500,
+                detail="WhatsApp credentials missing for bot"
+            )
+        
         url = f"{self.base_url}/{credentials.phone_number_id}/messages"
         
+        # Build payload with variables
         payload = {
             "messaging_product": "whatsapp",
             "to": message.to,
             "type": "template",
             "template": {
                 "name": message.template_name,
-                "language": {"code": message.language_code}
+                "language": {"code": "en_US"}
             }
         }
         
-        if message.parameters:
+        if message.variables:
             payload["template"]["components"] = [{
                 "type": "body",
-                "parameters": [{"type": "text", "text": param} for param in message.parameters]
+                "parameters": [{"type": "text", "text": var} for var in message.variables]
             }]
         
         headers = {
@@ -61,10 +73,31 @@ class WhatsAppService:
             "Content-Type": "application/json"
         }
         
+        logger.debug(f"Sending WhatsApp template to {message.to}: {message.template_name}")
+        
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                
+                # Log response details
+                logger.debug(f"WhatsApp API response: status={response.status_code}, body={response.text[:200]}")
+                
+                # Check for errors
+                if response.status_code >= 400:
+                    error_detail = f"Upstream WhatsApp API error: {response.text[:200]}"
+                    logger.error(error_detail)
+                    raise HTTPException(status_code=502, detail=error_detail)
+                
+                return response.json()
+                
+            except httpx.HTTPStatusError as e:
+                error_msg = f"Upstream error: {str(e.response.text)[:200]}"
+                logger.error(f"WhatsApp API HTTP error: {error_msg}")
+                raise HTTPException(status_code=502, detail=error_msg)
+            except httpx.RequestError as e:
+                error_msg = f"Network error contacting WhatsApp API: {str(e)}"
+                logger.error(error_msg)
+                raise HTTPException(status_code=503, detail=error_msg)
     
     async def send_text_message(
         self,

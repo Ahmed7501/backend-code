@@ -51,6 +51,7 @@ class Template(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String)
     structure = Column(JSON)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Optional for global templates
 
 
 class WhatsAppMessage(Base):
@@ -152,7 +153,7 @@ class Trigger(Base):
     last_triggered_at = Column(DateTime, nullable=True)
     next_trigger_at = Column(DateTime, nullable=True)
     
-    # Metadata
+    # meta_data
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, onupdate=datetime.utcnow)
     

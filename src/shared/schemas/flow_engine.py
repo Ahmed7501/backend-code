@@ -2,8 +2,8 @@
 Flow Engine schemas for contact management and flow execution.
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from typing import Optional, List, Dict, Any, Union, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -27,6 +27,24 @@ class ContactResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    class Config:
+        orm_mode = True
+        from_attributes = True
+
+    @classmethod
+    def from_orm(cls, obj):
+        # Convert SQLAlchemy InstrumentedList to dict if needed
+        attributes_dict = None
+        if hasattr(obj, "attributes") and obj.attributes is not None:
+            try:
+                attributes_dict = {item.key: item.value for item in obj.attributes}  # convert list to dict
+            except Exception:
+                # fallback if attributes already a dict
+                attributes_dict = obj.attributes
+        obj_dict = obj.__dict__.copy()
+        obj_dict['attributes'] = attributes_dict
+        return super().model_validate(obj_dict)
+
 
 class FlowExecutionStatus(str, Enum):
     """Flow execution status enum."""
@@ -46,6 +64,7 @@ class FlowExecutionSchema(BaseModel):
 
 class FlowExecutionResponse(BaseModel):
     """Flow execution response schema."""
+    model_config = ConfigDict(from_attributes=True)
     id: int
     flow_id: int
     contact_id: int
@@ -69,51 +88,134 @@ class NodeExecutionResult(BaseModel):
 
 class SendMessageNodeConfig(BaseModel):
     """Configuration for send_message nodes."""
-    message_type: str = Field(..., description="Type: text, template, media, interactive")
-    content: Dict[str, Any] = Field(..., description="Message content")
-    variables: Optional[List[str]] = Field(default=[], description="Variables to interpolate")
-    next: int = Field(..., description="Next node index")
+    message_type: Literal["text", "template", "media", "interactive"] = Field(..., description="Message type")
+    content: Dict[str, Any] = Field(..., description="Message content", min_length=1)
+    variables: Optional[List[str]] = Field(default_factory=list, description="Variables to interpolate")
+    # If missing or null, default to -1 which we treat as end-of-flow
+    next: int = Field(default=-1, description="Next node index; -1 means end-of-flow")
+    
+    @field_validator('content')
+    @classmethod
+    def validate_content(cls, v):
+        if not v:
+            raise ValueError("content cannot be empty")
+        return v
+    
+    @field_validator('message_type')
+    @classmethod
+    def validate_message_type(cls, v):
+        allowed = {"text", "template", "media", "interactive"}
+        if v not in allowed:
+            raise ValueError(f"message_type must be one of {allowed}")
+        return v
+
+    @model_validator(mode='before')
+    @classmethod
+    def default_next_to_minus_one(cls, data: Any):
+        # Centralized fallback: if next is missing/None, set to -1 before validation
+        if isinstance(data, dict) and ("next" not in data or data.get("next") is None):
+            import logging
+            logging.getLogger(__name__).info(
+                "send_message.next missing/null; defaulting to -1 (end-of-flow)"
+            )
+            data = {**data, "next": -1}  # apply fallback
+        return data
+
+    @field_validator('next')
+    @classmethod
+    def validate_next(cls, v: int) -> int:
+        if not isinstance(v, int):
+            raise ValueError("next must be an integer")
+        if v < -1:
+            raise ValueError("next must be -1 or a non-negative integer")
+        return v
 
 
 class WaitNodeConfig(BaseModel):
     """Configuration for wait nodes."""
-    duration: int = Field(..., description="Wait duration")
-    unit: str = Field(default="seconds", description="Unit: seconds, minutes, hours, days")
-    next: int = Field(..., description="Next node index")
+    duration: int = Field(..., description="Wait duration", gt=0)
+    unit: Literal["seconds", "minutes", "hours", "days"] = Field(default="seconds", description="Unit")
+    next: int = Field(..., description="Next node index", ge=0)
+    
+    @field_validator('duration')
+    @classmethod
+    def validate_duration(cls, v):
+        if v <= 0:
+            raise ValueError("duration must be a positive number")
+        return v
 
 
 class ConditionNodeConfig(BaseModel):
     """Configuration for condition nodes."""
-    variable: str = Field(..., description="Variable to evaluate")
-    operator: str = Field(..., description="Operator: ==, !=, >, <, >=, <=, contains, starts_with, ends_with")
+    variable: str = Field(..., description="Variable to evaluate", min_length=1)
+    operator: Literal["==", "!=", ">", "<", ">=", "<=", "contains", "starts_with", "ends_with"] = Field(..., description="Operator")
     value: Any = Field(..., description="Value to compare against")
-    true_path: int = Field(..., description="Next node if condition is true")
-    false_path: int = Field(..., description="Next node if condition is false")
+    true_path: int = Field(..., description="Next node if condition is true", ge=0)
+    false_path: int = Field(..., description="Next node if condition is false", ge=0)
+    
+    @field_validator('variable')
+    @classmethod
+    def validate_variable(cls, v):
+        if not v or not v.strip():
+            raise ValueError("variable must be a non-empty string")
+        return v.strip()
 
 
 class WebhookActionNodeConfig(BaseModel):
     """Configuration for webhook_action nodes."""
     url: str = Field(..., description="Webhook URL")
-    method: str = Field(default="POST", description="HTTP method")
-    headers: Optional[Dict[str, str]] = Field(default={}, description="Request headers")
-    body: Optional[Dict[str, Any]] = Field(default={}, description="Request body")
+    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"] = Field(default="POST", description="HTTP method")
+    headers: Optional[Dict[str, str]] = Field(default_factory=dict, description="Request headers")
+    body: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Request body")
     store_response_in: Optional[str] = Field(None, description="State variable to store response")
-    next: int = Field(..., description="Next node index")
+    next: int = Field(..., description="Next node index", ge=0)
+    
+    @field_validator('url')
+    @classmethod
+    def validate_url(cls, v):
+        if not v or not v.startswith(('http://', 'https://')):
+            raise ValueError("url must be a valid HTTP/HTTPS URL")
+        return v
 
 
 class SetAttributeNodeConfig(BaseModel):
     """Configuration for set_attribute nodes."""
-    attribute_key: str = Field(..., description="Attribute key name")
+    attribute_key: str = Field(..., description="Attribute key name", min_length=1)
     attribute_value: str = Field(..., description="Attribute value (supports {{variables}})")
-    value_type: Optional[str] = Field(default="string", description="Value type: string, number, boolean, json")
-    next: int = Field(..., description="Next node index")
+    value_type: Literal["string", "number", "boolean", "json"] = Field(default="string", description="Value type")
+    next: int = Field(..., description="Next node index", ge=0)
+    
+    @field_validator('attribute_key')
+    @classmethod
+    def validate_attribute_key(cls, v):
+        if not v or not v.strip():
+            raise ValueError("attribute_key must be a non-empty string")
+        return v.strip()
 
 
 class FlowNodeSchema(BaseModel):
     """Generic flow node schema."""
-    type: str = Field(..., description="Node type: send_message, wait, condition, webhook_action, set_attribute")
-    config: Union[SendMessageNodeConfig, WaitNodeConfig, ConditionNodeConfig, WebhookActionNodeConfig, SetAttributeNodeConfig]
-    next: Optional[int] = Field(None, description="Next node index")
+    type: Literal["send_message", "wait", "condition", "webhook_action", "set_attribute"] = Field(
+        ..., description="Node type"
+    )
+    config: Union[
+        SendMessageNodeConfig,
+        WaitNodeConfig,
+        ConditionNodeConfig,
+        WebhookActionNodeConfig,
+        SetAttributeNodeConfig
+    ] = Field(..., description="Node configuration")
+    next: Optional[int] = Field(None, description="Next node index", ge=0)
+    
+    @field_validator('config', mode='before')
+    @classmethod
+    def validate_config_structure(cls, v, info):
+        """Ensure config matches the node type."""
+        if not isinstance(v, dict):
+            raise ValueError("config must be a dictionary")
+        if not v:
+            raise ValueError("config cannot be empty")
+        return v
 
 
 class FlowExecutionLogResponse(BaseModel):

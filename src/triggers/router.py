@@ -2,6 +2,7 @@
 Trigger API router for automation trigger management.
 """
 
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
@@ -40,15 +41,15 @@ async def create_trigger_endpoint(
     try:
         # Verify user owns the bot
         from ..shared.models.bot_builder import Bot
-        bot = db.query(Bot).filter(Bot.id == request.bot_id).first()
+        bot = await asyncio.to_thread(lambda: db.query(Bot).filter(Bot.id == request.bot_id).first())
         if not bot:
             raise HTTPException(status_code=404, detail="Bot not found")
         
-        if not check_bot_ownership_or_admin(bot, current_user, db):
+        if not await asyncio.to_thread(check_bot_ownership_or_admin, bot, current_user, db):
             raise HTTPException(status_code=403, detail="Access denied to this bot")
         
         trigger_data = request.dict()
-        trigger = create_trigger(db, trigger_data)
+        trigger = await asyncio.to_thread(create_trigger, db, trigger_data)
         return TriggerResponse.from_orm(trigger)
     
     except HTTPException:
@@ -65,8 +66,8 @@ async def get_all_triggers_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get all triggers with pagination."""
-    triggers = get_all_triggers(db, skip, limit)
-    total = db.query(Trigger).count()
+    triggers = await asyncio.to_thread(get_all_triggers, db, skip, limit)
+    total = await asyncio.to_thread(lambda: db.query(Trigger).count())
     
     return TriggerListResponse(
         triggers=[TriggerResponse.from_orm(trigger) for trigger in triggers],
@@ -82,7 +83,7 @@ async def get_trigger_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get a trigger by ID."""
-    trigger = get_trigger(db, trigger_id)
+    trigger = await asyncio.to_thread(get_trigger, db, trigger_id)
     if not trigger:
         raise HTTPException(status_code=404, detail="Trigger not found")
     return TriggerResponse.from_orm(trigger)
@@ -96,7 +97,7 @@ async def get_triggers_by_bot_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get triggers for a specific bot."""
-    triggers = get_triggers_by_bot(db, bot_id, skip, limit)
+    triggers = await asyncio.to_thread(get_triggers_by_bot, db, bot_id, skip, limit)
     total = len(triggers)  # This is approximate, could be improved with proper counting
     
     return TriggerListResponse(
@@ -116,7 +117,7 @@ async def update_trigger_endpoint(
     """Update a trigger."""
     update_data = {k: v for k, v in request.dict().items() if v is not None}
     
-    trigger = update_trigger(db, trigger_id, update_data)
+    trigger = await asyncio.to_thread(update_trigger, db, trigger_id, update_data)
     if not trigger:
         raise HTTPException(status_code=404, detail="Trigger not found")
     
@@ -129,7 +130,7 @@ async def delete_trigger_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Delete a trigger."""
-    success = delete_trigger(db, trigger_id)
+    success = await asyncio.to_thread(delete_trigger, db, trigger_id)
     if not success:
         raise HTTPException(status_code=404, detail="Trigger not found")
     
@@ -142,7 +143,7 @@ async def activate_trigger_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Activate a trigger."""
-    trigger = activate_trigger(db, trigger_id)
+    trigger = await asyncio.to_thread(activate_trigger, db, trigger_id)
     if not trigger:
         raise HTTPException(status_code=404, detail="Trigger not found")
     
@@ -155,7 +156,7 @@ async def deactivate_trigger_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Deactivate a trigger."""
-    trigger = deactivate_trigger(db, trigger_id)
+    trigger = await asyncio.to_thread(deactivate_trigger, db, trigger_id)
     if not trigger:
         raise HTTPException(status_code=404, detail="Trigger not found")
     
@@ -169,11 +170,11 @@ async def test_trigger_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Test a trigger."""
-    trigger = get_trigger(db, trigger_id)
+    trigger = await asyncio.to_thread(get_trigger, db, trigger_id)
     if not trigger:
         raise HTTPException(status_code=404, detail="Trigger not found")
     
-    matcher = TriggerMatcher(db)
+    matcher = await asyncio.to_thread(TriggerMatcher, db)
     
     try:
         if trigger.trigger_type == "keyword" and request.test_message:
@@ -201,11 +202,11 @@ async def get_trigger_logs_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get execution logs for a trigger."""
-    trigger = get_trigger(db, trigger_id)
+    trigger = await asyncio.to_thread(get_trigger, db, trigger_id)
     if not trigger:
         raise HTTPException(status_code=404, detail="Trigger not found")
     
-    logs = get_trigger_logs(db, trigger_id, skip, limit)
+    logs = await asyncio.to_thread(get_trigger_logs, db, trigger_id, skip, limit)
     total = len(logs)  # This is approximate
     
     return TriggerLogListResponse(
@@ -223,18 +224,18 @@ async def get_trigger_performance_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get performance statistics for a trigger."""
-    trigger = get_trigger(db, trigger_id)
+    trigger = await asyncio.to_thread(get_trigger, db, trigger_id)
     if not trigger:
         raise HTTPException(status_code=404, detail="Trigger not found")
     
-    stats = get_trigger_performance_stats(db, trigger_id, days)
+    stats = await asyncio.to_thread(get_trigger_performance_stats, db, trigger_id, days)
     return stats
 
 
 @router.get("/statistics", response_model=TriggerStatistics)
 async def get_trigger_statistics_endpoint(db: Session = Depends(get_sync_session)):
     """Get trigger statistics."""
-    stats = get_trigger_statistics(db)
+    stats = await asyncio.to_thread(get_trigger_statistics, db)
     return TriggerStatistics(**stats)
 
 

@@ -2,6 +2,7 @@
 API router for contact attributes management.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -46,12 +47,13 @@ async def set_contact_attribute_endpoint(
 ):
     """Set a single contact attribute."""
     # Check if contact exists
-    contact = get_contact_by_id(db, contact_id)
+    contact = await asyncio.to_thread(get_contact_by_id, db, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     
     try:
-        attr = set_contact_attribute(
+        attr = await asyncio.to_thread(
+            set_contact_attribute,
             db, 
             contact_id, 
             request.key, 
@@ -80,13 +82,13 @@ async def bulk_set_contact_attributes_endpoint(
 ):
     """Set multiple contact attributes at once."""
     # Check if contact exists
-    contact = get_contact_by_id(db, contact_id)
+    contact = await asyncio.to_thread(get_contact_by_id, db, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     
     try:
         attributes_data = [attr.dict() for attr in request.attributes]
-        attrs = bulk_set_contact_attributes(db, contact_id, attributes_data)
+        attrs = await asyncio.to_thread(bulk_set_contact_attributes, db, contact_id, attributes_data)
         
         return [
             GetAttributeResponse(
@@ -110,12 +112,12 @@ async def get_contact_attributes_endpoint(
 ):
     """Get all attributes for a contact."""
     # Check if contact exists
-    contact = get_contact_by_id(db, contact_id)
+    contact = await asyncio.to_thread(get_contact_by_id, db, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     
     try:
-        attributes_dict = get_contact_attributes_dict(db, contact_id)
+        attributes_dict = await asyncio.to_thread(get_contact_attributes_dict, db, contact_id)
         return ContactAttributesResponse(
             contact_id=contact_id,
             attributes=attributes_dict,
@@ -134,11 +136,11 @@ async def get_contact_attribute_endpoint(
 ):
     """Get a single contact attribute."""
     # Check if contact exists
-    contact = get_contact_by_id(db, contact_id)
+    contact = await asyncio.to_thread(get_contact_by_id, db, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     
-    attr = get_contact_attribute(db, contact_id, key)
+    attr = await asyncio.to_thread(get_contact_attribute, db, contact_id, key)
     if not attr:
         raise HTTPException(status_code=404, detail=f"Attribute '{key}' not found")
     
@@ -159,11 +161,11 @@ async def delete_contact_attribute_endpoint(
 ):
     """Delete a contact attribute."""
     # Check if contact exists
-    contact = get_contact_by_id(db, contact_id)
+    contact = await asyncio.to_thread(get_contact_by_id, db, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     
-    success = delete_contact_attribute(db, contact_id, key)
+    success = await asyncio.to_thread(delete_contact_attribute, db, contact_id, key)
     if not success:
         raise HTTPException(status_code=404, detail=f"Attribute '{key}' not found")
     
@@ -179,7 +181,7 @@ async def search_contacts_by_attribute_endpoint(
 ):
     """Search contacts by attribute value."""
     try:
-        contacts = search_contacts_by_attribute(db, key, value, value_type)
+        contacts = await asyncio.to_thread(search_contacts_by_attribute, db, key, value, value_type)
         
         # Convert contacts to response format
         contact_list = []
@@ -213,7 +215,7 @@ async def get_contact_with_attributes_endpoint(
     db: Session = Depends(get_db)
 ):
     """Get contact with optional attributes."""
-    contact = get_contact_by_id(db, contact_id)
+    contact = await asyncio.to_thread(get_contact_by_id, db, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     
@@ -229,7 +231,7 @@ async def get_contact_with_attributes_endpoint(
     
     if include_attributes:
         try:
-            attributes_dict = get_contact_attributes_dict(db, contact_id)
+            attributes_dict = await asyncio.to_thread(get_contact_attributes_dict, db, contact_id)
             response_data["attributes"] = attributes_dict
         except Exception as e:
             logger.error(f"Failed to get attributes for contact {contact_id}: {e}")

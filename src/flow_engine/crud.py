@@ -3,7 +3,7 @@ CRUD operations for flow engine functionality.
 """
 
 from typing import Optional, List, Dict, Any
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import desc, and_
 from datetime import datetime
 
@@ -88,8 +88,12 @@ def create_flow_execution(db: Session, execution_data: Dict[str, Any]) -> FlowEx
 
 
 def get_flow_execution(db: Session, execution_id: int) -> Optional[FlowExecution]:
-    """Get a flow execution by ID."""
-    return db.query(FlowExecution).filter(FlowExecution.id == execution_id).first()
+    """Get a flow execution by ID with eager-loaded relationships."""
+    return db.query(FlowExecution).options(
+        selectinload(FlowExecution.flow),
+        selectinload(FlowExecution.contact),
+        selectinload(FlowExecution.bot)
+    ).filter(FlowExecution.id == execution_id).first()
 
 
 def get_all_flow_executions(db: Session, skip: int = 0, limit: int = 100) -> List[FlowExecution]:

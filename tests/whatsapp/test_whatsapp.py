@@ -3,8 +3,10 @@ Tests for WhatsApp integration.
 """
 
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock
+from httpx import Response
 
 from src.shared.models.bot_builder import Bot
 
@@ -119,3 +121,131 @@ def test_whatsapp_send_message_disabled_bot(client: TestClient, db_session):
     
     assert response.status_code == 400
     assert "WhatsApp is not enabled" in response.json()["detail"]
+
+
+@respx.mock
+def test_send_template_invalid_body(client: TestClient, db_session):
+    """Test that invalid request body returns 422 with Pydantic errors."""
+    bot = Bot(name="Test", is_whatsapp_enabled=True)
+    db_session.add(bot)
+    db_session.commit()
+    
+    # Missing required field
+    response = client.post(
+        f"/whatsapp/send/template?bot_id={bot.id}",
+        json={"to": "+123"}  # Missing template_name
+    )
+    
+    assert response.status_code == 422
+    assert "template_name" in response.text.lower()
+
+
+@respx.mock
+def test_send_template_whatsapp_disabled(client: TestClient, db_session):
+    """Test that disabled WhatsApp returns 400 with specific message."""
+    bot = Bot(name="Test", is_whatsapp_enabled=False)
+    db_session.add(bot)
+    db_session.commit()
+    
+    response = client.post(
+        f"/whatsapp/send/template?bot_id={bot.id}",
+        json={
+            "template_name": "welcome",
+            "to": "+123",
+            "variables": ["A", "B"]
+        }
+    )
+    
+    assert response.status_code == 400
+    assert response.json()["detail"] == "WhatsApp is not enabled for this bot"
+
+
+@respx.mock
+def test_send_template_success(client: TestClient, db_session):
+    """Test successful template sending with upstream mocking."""
+    bot = Bot(
+        name="Test",
+        is_whatsapp_enabled=True,
+        whatsapp_access_token="test_token",
+        whatsapp_phone_number_id="12345"
+    )
+    db_session.add(bot)
+    db_session.commit()
+    
+    # Mock WhatsApp API
+    mock_route = respx.post("https://graph.facebook.com/v17.0/12345/messages")
+    mock_route.mock(return_value=Response(
+        200,
+        json={"messages": [{"id": "wamid.test123"}], "timestamp": 1234567890}
+    ))
+    
+    response = client.post(
+        f"/whatsapp/send/template?bot_id={bot.id}",
+        json={
+            "template_name": "welcome",
+            "to": "+1234567890",
+            "variables": ["John", "Doe"]
+        }
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["message_id"] == "wamid.test123"
+    assert data["status"] == "sent"
+
+
+@respx.mock
+def test_send_template_missing_credentials(client: TestClient, db_session):
+    """Test template sending with missing credentials returns 500."""
+    bot = Bot(
+        name="Test",
+        is_whatsapp_enabled=True,
+        whatsapp_access_token=None,  # Missing token
+        whatsapp_phone_number_id="12345"
+    )
+    db_session.add(bot)
+    db_session.commit()
+    
+    response = client.post(
+        f"/whatsapp/send/template?bot_id={bot.id}",
+        json={
+            "template_name": "welcome",
+            "to": "+1234567890",
+            "variables": ["John", "Doe"]
+        }
+    )
+    
+    assert response.status_code == 500
+    assert "WhatsApp credentials missing" in response.json()["detail"]
+
+
+@respx.mock
+def test_send_template_upstream_error(client: TestClient, db_session):
+    """Test template sending with upstream API error returns 502."""
+    bot = Bot(
+        name="Test",
+        is_whatsapp_enabled=True,
+        whatsapp_access_token="test_token",
+        whatsapp_phone_number_id="12345"
+    )
+    db_session.add(bot)
+    db_session.commit()
+    
+    # Mock WhatsApp API error
+    mock_route = respx.post("https://graph.facebook.com/v17.0/12345/messages")
+    mock_route.mock(return_value=Response(
+        400,
+        json={"error": {"message": "Invalid template name"}}
+    ))
+    
+    response = client.post(
+        f"/whatsapp/send/template?bot_id={bot.id}",
+        json={
+            "template_name": "invalid_template",
+            "to": "+1234567890",
+            "variables": ["John", "Doe"]
+        }
+    )
+    
+    assert response.status_code == 502
+    assert "Upstream WhatsApp API error" in response.json()["detail"]

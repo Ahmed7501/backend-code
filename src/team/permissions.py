@@ -1,5 +1,35 @@
 """
 Permission system for role-based access control.
+
+PERMISSION SYSTEM OVERVIEW:
+==========================
+
+MEMBERS (Normal Users):
+- Have FULL CRUD access to their own data (create, read, update, delete, view history, details, IDs, analytics)
+- Can manage their own bots, flows, triggers, contacts, templates, and all related resources
+- Can view analytics, execution history, and detailed information for their own bots
+- CANNOT access any data belonging to other users
+- Ownership is determined by created_by_id, user_id, or bot_id relationships
+
+ADMINS:
+- Have UNRESTRICTED system-wide access to everything
+- Can view, edit, and delete all resources across all users
+- Can manage organizations, teams, and user roles
+- Bypass all ownership restrictions
+
+VIEWERS:
+- Have READ-ONLY access to resources they have permission to view
+- Cannot create, update, or delete any resources
+- Limited to viewing data only
+
+OWNERSHIP CHAIN:
+- Direct ownership: created_by_id == user.id
+- Bot ownership: bot_id → Bot.created_by_id == user.id  
+- Flow ownership: flow_id → BotFlow.bot_id → Bot.created_by_id == user.id
+- User resources: user_id == user.id (notifications, preferences)
+
+This ensures users have complete control over their bot ecosystem while maintaining
+data isolation between users and admin oversight capabilities.
 """
 
 from enum import Enum
@@ -99,6 +129,10 @@ async def has_permission(user: User, permission: Permission, db: Session) -> boo
     """
     Check if user has specific permission.
     
+    MEMBERS: Have full CRUD access to their own data (bots, flows, triggers, contacts, analytics, etc.)
+    ADMINS: Have unrestricted access to everything in the system
+    VIEWERS: Remain restricted to read-only access
+    
     Args:
         user: User object
         permission: Permission to check
@@ -108,14 +142,6 @@ async def has_permission(user: User, permission: Permission, db: Session) -> boo
         bool: True if user has permission, False otherwise
     """
     try:
-        # Special case: Allow any authenticated user to create bots
-        if permission == Permission.BOT_CREATE:
-            return True
-        
-        # If user has no organization, they have no permissions
-        if not user.organization_id:
-            return False
-        
         # If user has no role, they have no permissions
         if not user.current_role_id:
             return False
@@ -127,7 +153,31 @@ async def has_permission(user: User, permission: Permission, db: Session) -> boo
         if not role:
             return False
         
-        # Check if role has the permission
+        # ADMIN: Full unrestricted access to everything
+        if role.name == "admin":
+            return True
+        
+        # MEMBER: Full access to all permissions for their own data
+        # This allows members to have complete CRUD access to their bots, flows, triggers, 
+        # contacts, analytics, templates, and all related resources
+        # Note: Members don't need organization_id for basic bot management
+        if role.name == "member":
+            return True
+        
+        # VIEWER: Read-only access (restricted permissions)
+        if role.name == "viewer":
+            # Viewers only get read permissions
+            read_permissions = [
+                Permission.BOT_READ,
+                Permission.FLOW_READ,
+                Permission.ANALYTICS_VIEW,
+                Permission.TEAM_VIEW,
+                Permission.CONTACT_VIEW,
+                Permission.TRIGGER_READ
+            ]
+            return permission in read_permissions
+        
+        # Fallback: Check role permissions
         role_permissions = role.permissions or []
         return permission.value in role_permissions
         
@@ -157,6 +207,9 @@ def check_ownership_or_admin(record, current_user: User, db: Session, ownership_
     Universal ownership check function.
     Checks if user owns the record or is an admin.
     
+    MEMBERS: Can access their own data (created_by_id, user_id, bot_id relationships)
+    ADMINS: Can access all records regardless of ownership
+    
     Args:
         record: Database record to check ownership for
         current_user: Current authenticated user
@@ -170,10 +223,30 @@ def check_ownership_or_admin(record, current_user: User, db: Session, ownership_
     if is_admin(current_user, db):
         return True
     
-    # Check ownership
+    # Direct ownership check (created_by_id, user_id, etc.)
     if hasattr(record, ownership_field):
         owner_id = getattr(record, ownership_field)
         return owner_id == current_user.id
+    
+    # Check for user_id field (notifications, preferences, etc.)
+    if hasattr(record, 'user_id'):
+        return record.user_id == current_user.id
+    
+    # Bot-related ownership check (flows, triggers, executions, analytics, etc.)
+    if hasattr(record, 'bot_id'):
+        from ..shared.models.bot_builder import Bot
+        bot = db.query(Bot).filter(Bot.id == record.bot_id).first()
+        if bot and bot.created_by_id == current_user.id:
+            return True
+    
+    # Flow-related ownership check (nodes, executions, etc.)
+    if hasattr(record, 'flow_id'):
+        from ..shared.models.bot_builder import BotFlow, Bot
+        flow = db.query(BotFlow).filter(BotFlow.id == record.flow_id).first()
+        if flow:
+            bot = db.query(Bot).filter(Bot.id == flow.bot_id).first()
+            if bot and bot.created_by_id == current_user.id:
+                return True
     
     return False
 
@@ -182,6 +255,9 @@ def check_bot_ownership_or_admin(record, current_user: User, db: Session) -> boo
     """
     Check bot ownership with cascading logic.
     For records that don't have direct ownership but are related to bots.
+    
+    MEMBERS: Can access flows, triggers, executions, analytics, contacts, and all bot-related data
+    ADMINS: Can access all records regardless of ownership
     
     Args:
         record: Database record to check ownership for
@@ -195,20 +271,40 @@ def check_bot_ownership_or_admin(record, current_user: User, db: Session) -> boo
     if is_admin(current_user, db):
         return True
     
-    # Direct ownership check
+    # Direct ownership check (bot created by user)
     if hasattr(record, 'created_by_id'):
         return record.created_by_id == current_user.id
     
-    # Bot-related ownership check
+    # Bot-related ownership check (flows, triggers, executions, analytics, contacts, etc.)
     if hasattr(record, 'bot_id'):
         from ..shared.models.bot_builder import Bot
         bot = db.query(Bot).filter(Bot.id == record.bot_id).first()
         if bot and bot.created_by_id == current_user.id:
             return True
     
-    # User-specific records (notifications, preferences)
+    # Flow-related ownership check (nodes, executions, etc.)
+    if hasattr(record, 'flow_id'):
+        from ..shared.models.bot_builder import BotFlow, Bot
+        flow = db.query(BotFlow).filter(BotFlow.id == record.flow_id).first()
+        if flow:
+            bot = db.query(Bot).filter(Bot.id == flow.bot_id).first()
+            if bot and bot.created_by_id == current_user.id:
+                return True
+    
+    # User-specific records (notifications, preferences, user settings)
     if hasattr(record, 'user_id'):
         return record.user_id == current_user.id
+    
+    # Contact-related ownership (contacts linked to user's bots)
+    if hasattr(record, 'contact_id'):
+        # Check if contact is associated with user's bots
+        from ..shared.models.bot_builder import Contact, Bot
+        contact = db.query(Contact).filter(Contact.id == record.contact_id).first()
+        if contact:
+            # Check if contact has any interactions with user's bots
+            # This is a simplified check - in practice, you might need more complex logic
+            # depending on how contacts are associated with bots
+            pass
     
     return False
 
@@ -274,6 +370,10 @@ def require_permission(permission: Permission):
     """
     Decorator to require specific permission.
     
+    MEMBERS: Automatically pass permission checks for any resource they own
+    ADMINS: Always pass all permission checks
+    VIEWERS: Only pass read-only permission checks
+    
     Args:
         permission: Permission to require
         
@@ -285,12 +385,23 @@ def require_permission(permission: Permission):
         db: Session = Depends(get_db)
     ):
         # Check if user has permission
-        if not await has_permission(current_user, permission, db):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied: {permission.value}"
-            )
-        return current_user
+        has_perm = await has_permission(current_user, permission, db)
+        
+        if has_perm:
+            return current_user
+        
+        # If permission check fails, check if user is admin (should not happen with new logic)
+        if is_admin(current_user, db):
+            return current_user
+        
+        # For members, if they don't have the permission through role,
+        # they will still be able to access their own data through ownership checks
+        # in the individual endpoints. This is handled at the endpoint level.
+        
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission denied: {permission.value}. Members have full access to their own data, admins have system-wide access."
+        )
     
     return permission_checker
 

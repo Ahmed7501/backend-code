@@ -2,6 +2,7 @@
 REST API router for notifications and notification preferences.
 """
 
+import asyncio
 import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -66,7 +67,7 @@ async def get_notifications_endpoint(
             offset=skip
         )
         
-        notifications = get_user_notifications(db, current_user.id, skip, limit, filter_params)
+        notifications = await asyncio.to_thread(get_user_notifications, db, current_user.id, skip, limit, filter_params)
         return [NotificationSchema.from_orm(notification) for notification in notifications]
         
     except Exception as e:
@@ -87,7 +88,7 @@ async def get_unread_notifications_endpoint(
     """Get unread notifications for the current user."""
     try:
         filter_params = NotificationFilter(is_read=False, limit=limit, offset=skip)
-        notifications = get_user_notifications(db, current_user.id, skip, limit, filter_params)
+        notifications = await asyncio.to_thread(get_user_notifications, db, current_user.id, skip, limit, filter_params)
         return [NotificationSchema.from_orm(notification) for notification in notifications]
         
     except Exception as e:
@@ -105,11 +106,11 @@ async def get_notification_count_endpoint(
 ):
     """Get notification count for the current user."""
     try:
-        total = len(get_user_notifications(db, current_user.id, 0, 1000))
-        unread = get_unread_count(db, current_user.id)
+        total = len(await asyncio.to_thread(get_user_notifications, db, current_user.id, 0, 1000))
+        unread = await asyncio.to_thread(get_unread_count, db, current_user.id)
         
         # Get count by type
-        notifications = get_user_notifications(db, current_user.id, 0, 1000)
+        notifications = await asyncio.to_thread(get_user_notifications, db, current_user.id, 0, 1000)
         by_type = {}
         for notification in notifications:
             by_type[notification.type] = by_type.get(notification.type, 0) + 1
@@ -136,7 +137,7 @@ async def mark_notification_read_endpoint(
 ):
     """Mark a notification as read."""
     try:
-        notification = mark_as_read(db, notification_id, current_user.id)
+        notification = await asyncio.to_thread(mark_as_read, db, notification_id, current_user.id)
         if not notification:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -162,7 +163,7 @@ async def mark_all_read_endpoint(
 ):
     """Mark all notifications as read for the current user."""
     try:
-        updated_count = mark_all_as_read(db, current_user.id)
+        updated_count = await asyncio.to_thread(mark_all_as_read, db, current_user.id)
         
         return {
             "message": f"Marked {updated_count} notifications as read",
@@ -185,7 +186,7 @@ async def delete_notification_endpoint(
 ):
     """Delete a notification."""
     try:
-        success = delete_notification(db, notification_id, current_user.id)
+        success = await asyncio.to_thread(delete_notification, db, notification_id, current_user.id)
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -211,7 +212,7 @@ async def get_notification_preferences_endpoint(
 ):
     """Get notification preferences for the current user."""
     try:
-        preferences = get_user_preferences(db, current_user.id)
+        preferences = await asyncio.to_thread(get_user_preferences, db, current_user.id)
         if not preferences:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -238,7 +239,7 @@ async def update_notification_preferences_endpoint(
 ):
     """Update notification preferences for the current user."""
     try:
-        updated_preferences = update_user_preferences(db, current_user.id, preferences)
+        updated_preferences = await asyncio.to_thread(update_user_preferences, db, current_user.id, preferences)
         if not updated_preferences:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -264,7 +265,7 @@ async def get_notification_summary_endpoint(
 ):
     """Get notification summary for the current user."""
     try:
-        summary = get_notification_summary(db, current_user.id)
+        summary = await asyncio.to_thread(get_notification_summary, db, current_user.id)
         
         return NotificationSummary(
             total=summary["total"],

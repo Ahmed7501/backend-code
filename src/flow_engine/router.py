@@ -2,6 +2,7 @@
 Flow Engine API router for flow execution management.
 """
 
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
@@ -39,13 +40,13 @@ async def create_contact_endpoint(
 ):
     """Create a new contact."""
     # Check if contact already exists
-    existing_contact = get_contact_by_phone(db, contact.phone_number)
+    existing_contact = await asyncio.to_thread(get_contact_by_phone, db, contact.phone_number)
     if existing_contact:
         raise HTTPException(status_code=400, detail="Contact with this phone number already exists")
     
     contact_data = contact.dict()
     # Contacts are shared resources across bots, no direct ownership needed
-    new_contact = create_contact(db, contact_data)
+    new_contact = await asyncio.to_thread(create_contact, db, contact_data)
     return ContactResponse.from_orm(new_contact)
 
 
@@ -56,8 +57,8 @@ async def get_all_contacts_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get all contacts with pagination."""
-    contacts = get_all_contacts(db, skip, limit)
-    total = db.query(Contact).count()
+    contacts = await asyncio.to_thread(get_all_contacts, db, skip, limit)
+    total = await asyncio.to_thread(lambda: db.query(Contact).count())
     
     return ContactListResponse(
         contacts=[ContactResponse.from_orm(contact) for contact in contacts],
@@ -70,7 +71,7 @@ async def get_all_contacts_endpoint(
 @router.get("/contacts/{contact_id}", response_model=ContactResponse)
 async def get_contact_endpoint(contact_id: int, db: Session = Depends(get_sync_session)):
     """Get a contact by ID."""
-    contact = get_contact(db, contact_id)
+    contact = await asyncio.to_thread(get_contact, db, contact_id)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     return ContactResponse.from_orm(contact)
@@ -79,7 +80,7 @@ async def get_contact_endpoint(contact_id: int, db: Session = Depends(get_sync_s
 @router.get("/contacts/phone/{phone_number}", response_model=ContactResponse)
 async def get_contact_by_phone_endpoint(phone_number: str, db: Session = Depends(get_sync_session)):
     """Get a contact by phone number."""
-    contact = get_contact_by_phone(db, phone_number)
+    contact = await asyncio.to_thread(get_contact_by_phone, db, phone_number)
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     return ContactResponse.from_orm(contact)
@@ -95,11 +96,11 @@ async def start_flow_execution(
     """Start a new flow execution."""
     # Verify user owns the bot
     from ..shared.models.bot_builder import Bot
-    bot = db.query(Bot).filter(Bot.id == request.bot_id).first()
+    bot = await asyncio.to_thread(lambda: db.query(Bot).filter(Bot.id == request.bot_id).first())
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     
-    if not check_bot_ownership_or_admin(bot, current_user, db):
+    if not await asyncio.to_thread(check_bot_ownership_or_admin, bot, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this bot")
     
     try:
@@ -128,14 +129,18 @@ async def get_all_executions_endpoint(
 ):
     """Get all flow executions with pagination."""
     # Admins see all executions, users see only executions from their bots
-    if is_admin(current_user, db):
-        executions = get_all_flow_executions(db, skip, limit)
-        total = db.query(FlowExecution).count()
+    if await asyncio.to_thread(is_admin, current_user, db):
+        executions = await asyncio.to_thread(get_all_flow_executions, db, skip, limit)
+        total = await asyncio.to_thread(lambda: db.query(FlowExecution).count())
     else:
         # Filter executions by bot ownership
         from ..shared.models.bot_builder import Bot
-        executions = db.query(FlowExecution).join(Bot).filter(Bot.created_by_id == current_user.id).offset(skip).limit(limit).all()
-        total = db.query(FlowExecution).join(Bot).filter(Bot.created_by_id == current_user.id).count()
+        executions = await asyncio.to_thread(
+            lambda: db.query(FlowExecution).join(Bot).filter(Bot.created_by_id == current_user.id).offset(skip).limit(limit).all()
+        )
+        total = await asyncio.to_thread(
+            lambda: db.query(FlowExecution).join(Bot).filter(Bot.created_by_id == current_user.id).count()
+        )
     
     return FlowExecutionListResponse(
         executions=[FlowExecutionResponse.from_orm(execution) for execution in executions],
@@ -152,12 +157,12 @@ async def get_execution_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get a flow execution by ID."""
-    execution = get_flow_execution(db, execution_id)
+    execution = await asyncio.to_thread(get_flow_execution, db, execution_id)
     if not execution:
         raise HTTPException(status_code=404, detail="Flow execution not found")
     
     # Check ownership through bot
-    if not check_bot_ownership_or_admin(execution, current_user, db):
+    if not await asyncio.to_thread(check_bot_ownership_or_admin, execution, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this execution")
     
     return FlowExecutionResponse.from_orm(execution)
@@ -171,7 +176,7 @@ async def get_executions_by_contact_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get flow executions for a specific contact."""
-    executions = get_executions_by_phone(db, phone_number, skip, limit)
+    executions = await asyncio.to_thread(get_executions_by_phone, db, phone_number, skip, limit)
     total = len(executions)  # This is approximate, could be improved with proper counting
     
     return FlowExecutionListResponse(
@@ -191,7 +196,7 @@ async def resume_execution_endpoint(
     """Manually resume a flow execution."""
     try:
         engine = FlowEngine(db)
-        execution = get_flow_execution(db, execution_id)
+        execution = await asyncio.to_thread(get_flow_execution, db, execution_id)
         if not execution:
             raise HTTPException(status_code=404, detail="Flow execution not found")
         
@@ -214,7 +219,7 @@ async def cancel_execution_endpoint(
     """Cancel a flow execution."""
     try:
         engine = FlowEngine(db)
-        execution = get_flow_execution(db, execution_id)
+        execution = await asyncio.to_thread(get_flow_execution, db, execution_id)
         if not execution:
             raise HTTPException(status_code=404, detail="Flow execution not found")
         
@@ -235,7 +240,7 @@ async def handle_user_input_endpoint(
     """Handle user input for a flow execution."""
     try:
         engine = FlowEngine(db)
-        execution = get_flow_execution(db, execution_id)
+        execution = await asyncio.to_thread(get_flow_execution, db, execution_id)
         if not execution:
             raise HTTPException(status_code=404, detail="Flow execution not found")
         
@@ -259,18 +264,18 @@ async def get_execution_logs_endpoint(
     db: Session = Depends(get_sync_session)
 ):
     """Get execution logs for a flow execution."""
-    execution = get_flow_execution(db, execution_id)
+    execution = await asyncio.to_thread(get_flow_execution, db, execution_id)
     if not execution:
         raise HTTPException(status_code=404, detail="Flow execution not found")
     
-    logs = get_execution_logs(db, execution_id)
+    logs = await asyncio.to_thread(get_execution_logs, db, execution_id)
     return [FlowExecutionLogResponse.from_orm(log) for log in logs]
 
 
 @router.get("/statistics", response_model=dict)
 async def get_execution_statistics_endpoint(db: Session = Depends(get_sync_session)):
     """Get flow execution statistics."""
-    stats = get_execution_statistics(db)
+    stats = await asyncio.to_thread(get_execution_statistics, db)
     return stats
 
 

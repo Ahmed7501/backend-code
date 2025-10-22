@@ -2,6 +2,7 @@
 API router for analytics and reporting.
 """
 
+import asyncio
 import logging
 import time
 from typing import Optional, List, Dict, Any
@@ -46,7 +47,7 @@ async def get_analytics_overview(
     """Get analytics overview for specified period."""
     try:
         # Get overview statistics
-        stats = get_overview_stats(db, period, bot_id)
+        stats = await asyncio.to_thread(get_overview_stats, db, period, bot_id)
         
         # Calculate average response time (placeholder - would need actual implementation)
         average_response_time = 2.3  # This would be calculated from actual data
@@ -77,7 +78,7 @@ async def get_analytics_trends(
     """Get analytics trends over date range."""
     try:
         # Get daily stats for the period
-        daily_stats = get_daily_stats(db, start_date, end_date, bot_id)
+        daily_stats = await asyncio.to_thread(get_daily_stats, db, start_date, end_date, bot_id)
         
         # Format daily stats
         formatted_daily_stats = []
@@ -140,12 +141,12 @@ async def get_bot_performance(
     """Get performance metrics for a specific bot."""
     try:
         # Check if bot exists
-        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        bot = await asyncio.to_thread(lambda: db.query(Bot).filter(Bot.id == bot_id).first())
         if not bot:
             raise HTTPException(status_code=404, detail="Bot not found")
         
         # Get overview stats for the bot
-        stats = get_overview_stats(db, period, bot_id)
+        stats = await asyncio.to_thread(get_overview_stats, db, period, bot_id)
         
         # Calculate average flows per contact
         active_contacts = stats["active_contacts"]
@@ -180,7 +181,7 @@ async def get_delivery_rates(
     try:
         if granularity == "daily":
             # Get daily stats
-            daily_stats = get_daily_stats(db, start_date, end_date, bot_id)
+            daily_stats = await asyncio.to_thread(get_daily_stats, db, start_date, end_date, bot_id)
             
             delivery_rates = []
             total_sent = 0
@@ -208,15 +209,12 @@ async def get_delivery_rates(
             
         else:  # hourly
             # Get hourly stats (simplified implementation)
-            hourly_stats = db.query(HourlyMessageStats).filter(
-                HourlyMessageStats.hour >= start_date,
-                HourlyMessageStats.hour <= end_date
+            hourly_stats = await asyncio.to_thread(
+                lambda: db.query(HourlyMessageStats).filter(
+                    HourlyMessageStats.hour >= start_date,
+                    HourlyMessageStats.hour <= end_date
+                ).filter(HourlyMessageStats.bot_id == bot_id if bot_id else True).order_by(HourlyMessageStats.hour).all()
             )
-            
-            if bot_id:
-                hourly_stats = hourly_stats.filter(HourlyMessageStats.bot_id == bot_id)
-            
-            hourly_stats = hourly_stats.order_by(HourlyMessageStats.hour).all()
             
             delivery_rates = []
             total_sent = 0
@@ -261,7 +259,7 @@ async def get_active_contacts_stats(
     """Get active contacts statistics."""
     try:
         # Get overview stats
-        stats = get_overview_stats(db, period, bot_id)
+        stats = await asyncio.to_thread(get_overview_stats, db, period, bot_id)
         
         # Get daily active contacts breakdown
         end_date = datetime.utcnow()
@@ -272,7 +270,7 @@ async def get_active_contacts_stats(
         elif period == "30days":
             start_date = end_date - timedelta(days=30)
         
-        daily_stats = get_daily_stats(db, start_date, end_date, bot_id)
+        daily_stats = await asyncio.to_thread(get_daily_stats, db, start_date, end_date, bot_id)
         
         daily_active_contacts = [
             {"date": stat.date.isoformat(), "active_contacts": stat.active_contacts}
@@ -305,7 +303,7 @@ async def get_message_distribution(
     """Get message type distribution."""
     try:
         # Get overview stats
-        stats = get_overview_stats(db, period, bot_id)
+        stats = await asyncio.to_thread(get_overview_stats, db, period, bot_id)
         
         message_types = stats["top_message_types"]
         total_messages = stats["total_messages"]
@@ -356,7 +354,7 @@ async def trigger_manual_aggregation(
         else:
             # Aggregate for all bots
             task_result = aggregate_daily_stats_task.delay(target_date.isoformat())
-            aggregated_bots = [bot.id for bot in db.query(Bot).all()]
+            aggregated_bots = [bot.id for bot in await asyncio.to_thread(lambda: db.query(Bot).all())]
         
         processing_time = round(time.time() - start_time, 2)
         
@@ -377,14 +375,18 @@ async def analytics_health_check(db: Session = Depends(get_db)):
     """Health check for analytics system."""
     try:
         # Check if we have recent daily stats
-        recent_stats = db.query(DailyMessageStats).filter(
-            DailyMessageStats.date >= datetime.utcnow() - timedelta(days=1)
-        ).count()
+        recent_stats = await asyncio.to_thread(
+            lambda: db.query(DailyMessageStats).filter(
+                DailyMessageStats.date >= datetime.utcnow() - timedelta(days=1)
+            ).count()
+        )
         
         # Check if we have recent hourly stats
-        recent_hourly = db.query(HourlyMessageStats).filter(
-            HourlyMessageStats.hour >= datetime.utcnow() - timedelta(hours=1)
-        ).count()
+        recent_hourly = await asyncio.to_thread(
+            lambda: db.query(HourlyMessageStats).filter(
+                HourlyMessageStats.hour >= datetime.utcnow() - timedelta(hours=1)
+            ).count()
+        )
         
         return {
             "status": "healthy",

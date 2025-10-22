@@ -2,6 +2,7 @@
 Core Flow Engine for executing conversation flows.
 """
 
+import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -13,6 +14,7 @@ from ..shared.models.bot_builder import (
 from ..shared.schemas.flow_engine import (
     FlowExecutionStatus, NodeExecutionResult, FlowNodeSchema
 )
+from .flow_normalizer import FlowNormalizer
 from .node_executors import NodeExecutorFactory
 from .crud import (
     create_contact, get_contact_by_phone, get_flow_execution,
@@ -39,31 +41,31 @@ class FlowEngine:
         """Start a new flow execution."""
         try:
             # Get or create contact
-            contact = get_contact_by_phone(self.db, contact_phone)
+            contact = await asyncio.to_thread(get_contact_by_phone, self.db, contact_phone)
             if not contact:
-                contact = create_contact(self.db, {
+                contact = await asyncio.to_thread(create_contact, self.db, {
                     "phone_number": contact_phone,
                     "meta_data": {}
                 })
             
             # Check if contact already has an active execution
-            active_execution = get_active_execution_for_contact(self.db, contact.id)
+            active_execution = await asyncio.to_thread(get_active_execution_for_contact, self.db, contact.id)
             if active_execution:
                 logger.info(f"Contact {contact_phone} already has active execution {active_execution.id}")
                 return active_execution
             
             # Get flow
-            flow = self.db.query(BotFlow).filter(BotFlow.id == flow_id).first()
+            flow = await asyncio.to_thread(lambda: self.db.query(BotFlow).filter(BotFlow.id == flow_id).first())
             if not flow:
                 raise ValueError(f"Flow {flow_id} not found")
             
             # Get bot
-            bot = self.db.query(Bot).filter(Bot.id == bot_id).first()
+            bot = await asyncio.to_thread(lambda: self.db.query(Bot).filter(Bot.id == bot_id).first())
             if not bot:
                 raise ValueError(f"Bot {bot_id} not found")
             
             # Create flow execution
-            execution = create_flow_execution(self.db, {
+            execution = await asyncio.to_thread(create_flow_execution, self.db, {
                 "flow_id": flow_id,
                 "contact_id": contact.id,
                 "bot_id": bot_id,
@@ -86,14 +88,14 @@ class FlowEngine:
     async def execute_node(self, execution_id: int, node_index: int) -> NodeExecutionResult:
         """Execute a specific node in a flow execution."""
         try:
-            execution = get_flow_execution(self.db, execution_id)
+            execution = await asyncio.to_thread(get_flow_execution, self.db, execution_id)
             if not execution:
                 raise ValueError(f"Flow execution {execution_id} not found")
             
             # Update current node index
             execution.current_node_index = node_index
             execution.last_executed_at = datetime.utcnow()
-            self.db.commit()
+            await asyncio.to_thread(self.db.commit)
             
             # Execute the node
             result = await self._execute_current_node(execution)
@@ -107,7 +109,7 @@ class FlowEngine:
     async def resume_execution(self, execution_id: int, next_node_index: int) -> NodeExecutionResult:
         """Resume flow execution after wait or delay."""
         try:
-            execution = get_flow_execution(self.db, execution_id)
+            execution = await asyncio.to_thread(get_flow_execution, self.db, execution_id)
             if not execution:
                 raise ValueError(f"Flow execution {execution_id} not found")
             
@@ -118,7 +120,7 @@ class FlowEngine:
             execution.status = FlowExecutionStatus.RUNNING
             execution.current_node_index = next_node_index
             execution.last_executed_at = datetime.utcnow()
-            self.db.commit()
+            await asyncio.to_thread(self.db.commit)
             
             # Continue execution
             result = await self._execute_current_node(execution)
@@ -137,7 +139,7 @@ class FlowEngine:
     ) -> NodeExecutionResult:
         """Handle user input for a flow execution."""
         try:
-            execution = get_flow_execution(self.db, execution_id)
+            execution = await asyncio.to_thread(get_flow_execution, self.db, execution_id)
             if not execution:
                 raise ValueError(f"Flow execution {execution_id} not found")
             
@@ -148,7 +150,7 @@ class FlowEngine:
             
             # Update last executed time
             execution.last_executed_at = datetime.utcnow()
-            self.db.commit()
+            await asyncio.to_thread(self.db.commit)
             
             # Continue execution from current node
             result = await self._execute_current_node(execution)
@@ -162,14 +164,14 @@ class FlowEngine:
     async def complete_execution(self, execution_id: int) -> None:
         """Mark flow execution as completed."""
         try:
-            execution = get_flow_execution(self.db, execution_id)
+            execution = await asyncio.to_thread(get_flow_execution, self.db, execution_id)
             if not execution:
                 raise ValueError(f"Flow execution {execution_id} not found")
             
             execution.status = FlowExecutionStatus.COMPLETED
             execution.completed_at = datetime.utcnow()
             execution.last_executed_at = datetime.utcnow()
-            self.db.commit()
+            await asyncio.to_thread(self.db.commit)
             
             logger.info(f"Completed flow execution {execution_id}")
         
@@ -180,17 +182,17 @@ class FlowEngine:
     async def fail_execution(self, execution_id: int, error: str) -> None:
         """Mark flow execution as failed."""
         try:
-            execution = get_flow_execution(self.db, execution_id)
+            execution = await asyncio.to_thread(get_flow_execution, self.db, execution_id)
             if not execution:
                 raise ValueError(f"Flow execution {execution_id} not found")
             
             execution.status = FlowExecutionStatus.FAILED
             execution.completed_at = datetime.utcnow()
             execution.last_executed_at = datetime.utcnow()
-            self.db.commit()
+            await asyncio.to_thread(self.db.commit)
             
             # Log the error
-            create_execution_log(self.db, {
+            await asyncio.to_thread(create_execution_log, self.db, {
                 "execution_id": execution_id,
                 "node_index": execution.current_node_index,
                 "node_type": "error",
@@ -213,25 +215,38 @@ class FlowEngine:
                 await self.complete_execution(execution.id)
                 return NodeExecutionResult(success=True, next_node_index=None)
             
+            # Normalize flow structure for backward compatibility
+            normalized_structure = FlowNormalizer.normalize_flow_structure(flow.structure)
+            
             # Check if we've reached the end of the flow
-            if execution.current_node_index >= len(flow.structure):
+            if execution.current_node_index >= len(normalized_structure):
                 await self.complete_execution(execution.id)
                 return NodeExecutionResult(success=True, next_node_index=None)
             
-            # Get current node
-            node_data = flow.structure[execution.current_node_index]
+            # Get current node from normalized structure
+            node_data = normalized_structure[execution.current_node_index]
             node_type = node_data.get("type")
-            node_config = node_data.get("config", {})
-            
+
+            # Strict validation - fail fast on invalid data
             if not node_type:
-                raise ValueError(f"Node at index {execution.current_node_index} has no type")
+                error_msg = f"Node at index {execution.current_node_index} has no type field. Flow data is corrupted."
+                logger.error(error_msg)
+                await self.fail_execution(execution.id, error_msg)
+                raise ValueError(error_msg)
+
+            node_config = node_data.get("config")
+            if not node_config:
+                error_msg = f"Node at index {execution.current_node_index} has no config field. Flow data is corrupted."
+                logger.error(error_msg)
+                await self.fail_execution(execution.id, error_msg)
+                raise ValueError(error_msg)
             
             # Get contact and bot
             contact = execution.contact
             bot = execution.bot
             
             # Create executor and execute node
-            executor = NodeExecutorFactory.get_executor(node_type, self.db)
+            executor = await asyncio.to_thread(NodeExecutorFactory.get_executor, node_type, self.db)
             
             if node_type == "send_message":
                 from ..shared.schemas.flow_engine import SendMessageNodeConfig
@@ -241,12 +256,12 @@ class FlowEngine:
             elif node_type == "wait":
                 from ..shared.schemas.flow_engine import WaitNodeConfig
                 config = WaitNodeConfig(**node_config)
-                result = executor.execute(config, execution, contact, bot)
+                result = await asyncio.to_thread(executor.execute, config, execution, contact, bot)
             
             elif node_type == "condition":
                 from ..shared.schemas.flow_engine import ConditionNodeConfig
                 config = ConditionNodeConfig(**node_config)
-                result = executor.execute(config, execution, contact, bot)
+                result = await asyncio.to_thread(executor.execute, config, execution, contact, bot)
             
             elif node_type == "webhook_action":
                 from ..shared.schemas.flow_engine import WebhookActionNodeConfig
@@ -256,13 +271,13 @@ class FlowEngine:
             elif node_type == "set_attribute":
                 from ..shared.schemas.flow_engine import SetAttributeNodeConfig
                 config = SetAttributeNodeConfig(**node_config)
-                result = executor.execute(config, execution, contact, bot)
+                result = await asyncio.to_thread(executor.execute, config, execution, contact, bot)
             
             else:
                 raise ValueError(f"Unknown node type: {node_type}")
             
             # Log execution
-            create_execution_log(self.db, {
+            await asyncio.to_thread(create_execution_log, self.db, {
                 "execution_id": execution.id,
                 "node_index": execution.current_node_index,
                 "node_type": node_type,
@@ -282,7 +297,7 @@ class FlowEngine:
                         # Node scheduled a task (e.g., wait node)
                         execution.status = FlowExecutionStatus.WAITING
                     
-                    self.db.commit()
+                    await asyncio.to_thread(self.db.commit)
                     
                     # Continue execution if not waiting
                     if execution.status == FlowExecutionStatus.RUNNING:
@@ -304,7 +319,7 @@ class FlowEngine:
     async def execute_webhook_action(self, execution_id: int, webhook_config: dict) -> NodeExecutionResult:
         """Execute webhook action asynchronously."""
         try:
-            execution = get_flow_execution(self.db, execution_id)
+            execution = await asyncio.to_thread(get_flow_execution, self.db, execution_id)
             if not execution:
                 raise ValueError(f"Flow execution {execution_id} not found")
             
@@ -312,7 +327,7 @@ class FlowEngine:
             from .node_executors import WebhookActionNodeExecutor
             from ..shared.schemas.flow_engine import WebhookActionNodeConfig
             
-            executor = WebhookActionNodeExecutor(self.db)
+            executor = await asyncio.to_thread(WebhookActionNodeExecutor, self.db)
             config = WebhookActionNodeConfig(**webhook_config)
             
             result = await executor.execute(config, execution, execution.contact, execution.bot)
@@ -321,7 +336,7 @@ class FlowEngine:
             if result.success and result.result_data:
                 execution.state.update(result.result_data)
                 execution.last_executed_at = datetime.utcnow()
-                self.db.commit()
+                await asyncio.to_thread(self.db.commit)
             
             return result
         

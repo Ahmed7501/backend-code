@@ -6,14 +6,29 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
+from ..flow_engine.flow_normalizer import FlowNormalizer
 from ..shared.models.bot_builder import Bot, BotFlow, BotNode, Template
-from ..shared.schemas.bot_builder import BotSchema, FlowSchema, NodeSchema, TemplateSchema
+from ..shared.schemas.bot_builder import BotSchema, FlowSchema, NodeSchema, TemplateCreate, TemplateResponse
 
 
 # Bot CRUD operations
-def create_bot(db: Session, bot: BotSchema) -> Bot:
-    """Create a new bot."""
-    new_bot = Bot(name=bot.name, description=bot.description)
+def create_bot(db: Session, bot: BotSchema, created_by_id: int, organization_id: Optional[int] = None) -> Bot:
+    """Create a new bot with explicit ownership tracking."""
+    # Extract fields from the schema
+    bot_data = bot.dict()
+    
+    # Create new bot with explicit ownership
+    new_bot = Bot(
+        name=bot_data["name"],
+        description=bot_data.get("description"),
+        whatsapp_access_token=bot_data.get("whatsapp_access_token"),
+        whatsapp_phone_number_id=bot_data.get("whatsapp_phone_number_id"),
+        whatsapp_business_account_id=bot_data.get("whatsapp_business_account_id"),
+        is_whatsapp_enabled=bot_data.get("is_whatsapp_enabled", False),
+        created_by_id=created_by_id,  # Explicitly set from parameter
+        organization_id=organization_id  # Explicitly set from parameter
+    )
+    
     db.add(new_bot)
     db.commit()
     db.refresh(new_bot)
@@ -74,17 +89,29 @@ def create_flow(db: Session, flow: FlowSchema) -> BotFlow:
 
 
 def get_flow(db: Session, flow_id: int) -> Optional[BotFlow]:
-    """Get a flow by ID."""
-    return db.query(BotFlow).filter(BotFlow.id == flow_id).first()
+    """Get a flow by ID with normalized structure."""
+    flow = db.query(BotFlow).filter(BotFlow.id == flow_id).first()
+    if flow and flow.structure:
+        # Normalize structure for backward compatibility
+        flow.structure = FlowNormalizer.normalize_flow_structure(flow.structure)
+    return flow
 
 
 def get_all_flows(db: Session, skip: int = 0, limit: int = 100, created_by_id: int = None) -> List[BotFlow]:
-    """Get all flows with pagination."""
+    """Get all flows with normalized structures."""
     query = db.query(BotFlow)
     if created_by_id:
         # Filter flows by bot ownership
         query = query.join(Bot).filter(Bot.created_by_id == created_by_id)
-    return query.offset(skip).limit(limit).all()
+    
+    flows = query.offset(skip).limit(limit).all()
+    
+    # Normalize all flows
+    for flow in flows:
+        if flow.structure:
+            flow.structure = FlowNormalizer.normalize_flow_structure(flow.structure)
+    
+    return flows
 
 
 # Node CRUD operations
@@ -106,17 +133,22 @@ def get_node(db: Session, node_id: int) -> Optional[BotNode]:
     return db.query(BotNode).filter(BotNode.id == node_id).first()
 
 
-def get_all_nodes(db: Session, skip: int = 0, limit: int = 100) -> List[BotNode]:
+def get_all_nodes(db: Session, skip: int = 0, limit: int = 100, created_by_id: Optional[int] = None) -> List[BotNode]:
     """Get all nodes with pagination."""
-    return db.query(BotNode).offset(skip).limit(limit).all()
+    query = db.query(BotNode)
+    if created_by_id:
+        # Filter nodes by flow → bot ownership
+        query = query.join(BotFlow).join(Bot).filter(Bot.created_by_id == created_by_id)
+    return query.offset(skip).limit(limit).all()
 
 
 # Template CRUD operations
-def create_template(db: Session, template: TemplateSchema) -> Template:
-    """Create a new template."""
+def create_template(db: Session, template: TemplateCreate, created_by_id: int) -> Template:
+    """Create a new template with automatic ownership assignment."""
     new_template = Template(
-        name=template.name, 
-        structure=[n.dict() for n in template.structure]
+        name=template.name,
+        structure=[n.dict() for n in template.structure],
+        created_by_id=created_by_id
     )
     db.add(new_template)
     db.commit()
@@ -129,6 +161,10 @@ def get_template(db: Session, template_id: int) -> Optional[Template]:
     return db.query(Template).filter(Template.id == template_id).first()
 
 
-def get_all_templates(db: Session, skip: int = 0, limit: int = 100) -> List[Template]:
+def get_all_templates(db: Session, skip: int = 0, limit: int = 100, created_by_id: Optional[int] = None) -> List[Template]:
     """Get all templates with pagination."""
-    return db.query(Template).offset(skip).limit(limit).all()
+    query = db.query(Template)
+    if created_by_id:
+        # Filter by ownership or show global templates (created_by_id is None)
+        query = query.filter((Template.created_by_id == created_by_id) | (Template.created_by_id.is_(None)))
+    return query.offset(skip).limit(limit).all()

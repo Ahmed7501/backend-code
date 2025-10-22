@@ -100,9 +100,9 @@ class FlowValidator:
         """Validate a single node."""
         errors = []
         
-        # Check required fields
-        if "type" not in node:
-            errors.append(f"Node {node_index}: Missing 'type' field")
+        # Strict validation - no auto-fixing
+        if "type" not in node or not node.get("type"):
+            errors.append(f"Node {node_index}: Missing required 'type' field")
             return errors
         
         node_type = node["type"]
